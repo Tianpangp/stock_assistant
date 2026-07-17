@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from stockapp.db import database
 import pandas as pd
 
-from stockapp.strategy import candidate_metrics, planned_position, run_strategy
+from stockapp.strategy import MIN_STOCK_BARS, candidate_metrics, planned_position, run_strategy
 
 
 def weekday_dates(count: int) -> list[str]:
@@ -24,6 +26,27 @@ def weekday_dates(count: int) -> list[str]:
 class StrategyTest(unittest.TestCase):
     def test_empty_security_history_is_skipped(self) -> None:
         self.assertIsNone(candidate_metrics(pd.DataFrame(), 0.01))
+
+    def test_minimum_stock_history_is_120_bars(self) -> None:
+        rows = []
+        for index, trade_date in enumerate(weekday_dates(MIN_STOCK_BARS)):
+            close = 20 + index * 0.02 + (0.08 if index % 2 else -0.08)
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "open": close - 0.05,
+                    "high": close + 0.15,
+                    "low": close - 0.15,
+                    "close": close,
+                    "volume": 10_000_000 + (index % 3) * 100_000,
+                    "amount": 600_000_000,
+                    "trade_status": 1,
+                    "is_st": 0,
+                }
+            )
+        frame = pd.DataFrame(rows)
+        self.assertIsNone(candidate_metrics(frame.iloc[:-1], 0.01))
+        self.assertIsNotNone(candidate_metrics(frame, 0.01))
 
     def test_position_sizing_respects_risk_and_lot_size(self) -> None:
         quantity, stop = planned_position(50_000, 20, 0.5)
@@ -56,6 +79,12 @@ class StrategyTest(unittest.TestCase):
                             ("sz.000001", trade_date, stock - .1, stock + .2, stock - .2, stock, volume, 700_000_000, 1.5, 15, 2, 2, 10, 1, 0),
                         ]
                     )
+                rows.append(
+                    (
+                        "sz.000001", "2026-12-31", stock, stock + .2, stock - .2,
+                        stock, volume, 700_000_000, 1.5, 15, 2, 2, 10, 1, 0,
+                    )
+                )
                 connection.executemany(
                     """
                     INSERT INTO daily_bars(
@@ -66,7 +95,8 @@ class StrategyTest(unittest.TestCase):
                     """,
                     rows,
                 )
-                run_id = run_strategy(connection)
+                with patch("stockapp.strategy.kronos_available", return_value=False):
+                    run_id = run_strategy(connection, use_kronos=True)
                 run = connection.execute(
                     "SELECT * FROM recommendation_runs WHERE id=?", (run_id,)
                 ).fetchone()
@@ -86,6 +116,7 @@ class StrategyTest(unittest.TestCase):
                 self.assertIsNotNone(factor)
                 self.assertGreaterEqual(factor["confidence"], 70)
                 self.assertIsNotNone(risk)
+                self.assertFalse(json.loads(run["metrics_json"])["kronos"]["used"])
 
 
 if __name__ == "__main__":

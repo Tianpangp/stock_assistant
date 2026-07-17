@@ -36,8 +36,17 @@ def recommend_command(args: argparse.Namespace) -> None:
         job_id = start_job(connection, "RECOMMEND")
         try:
             run_id = run_strategy(connection, use_kronos=args.kronos, top_k=args.top)
-            finish_job(connection, job_id, "COMPLETE", {"run_id": run_id})
-            print(json.dumps({"run_id": run_id}, ensure_ascii=False))
+            run = connection.execute(
+                "SELECT metrics_json FROM recommendation_runs WHERE id=?", (run_id,)
+            ).fetchone()
+            model_status = json.loads(run["metrics_json"]).get("kronos", {}) if run else {}
+            payload = {
+                "run_id": run_id,
+                "kronos_requested": bool(model_status.get("requested")),
+                "kronos_used": bool(model_status.get("used")),
+            }
+            finish_job(connection, job_id, "COMPLETE", payload)
+            print(json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             finish_job(connection, job_id, "FAILED", str(exc))
             raise

@@ -6,6 +6,13 @@ document.querySelectorAll('form').forEach((form) => {
       button.dataset.label = button.textContent;
       button.textContent = '处理中…';
     }
+
+    if (form.hasAttribute('data-background-job')) {
+      const overlay = document.querySelector('[data-job-overlay]');
+      const message = overlay?.querySelector('[data-job-message]');
+      if (message && form.dataset.jobLabel) message.textContent = form.dataset.jobLabel;
+      if (overlay) overlay.hidden = false;
+    }
   });
 });
 
@@ -15,5 +22,5 @@ if (notices.length) {
 }
 
 if (document.querySelector('.job-status.running')) {
-  window.setTimeout(() => window.location.reload(), 5000);
+  window.setTimeout(() => window.location.reload(), 3000);
 }

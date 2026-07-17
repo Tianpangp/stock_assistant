@@ -75,6 +75,25 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("旧格式结果", response.get_data(as_text=True))
 
+    def test_dashboard_shows_global_overlay_for_running_job(self) -> None:
+        with database(self.db_path) as connection:
+            connection.execute(
+                "INSERT INTO job_runs(job_type, status) VALUES ('SYNC', 'RUNNING')"
+            )
+            connection.commit()
+
+        response = self.client.get("/")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("正在更新日线数据", body)
+        self.assertNotIn('data-job-overlay role="status" aria-live="polite" hidden', body)
+
+    def test_dashboard_hides_kronos_when_unavailable(self) -> None:
+        self.app.config["KRONOS_AVAILABLE"] = False
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("使用 Kronos", response.get_data(as_text=True))
+
 
 if __name__ == "__main__":
     unittest.main()

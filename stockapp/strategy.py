@@ -7,9 +7,13 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from .config import kronos_available
 from .db import set_setting
 from .market_data import INDEX_CODE
 from .portfolio import calculate_portfolio
+
+
+MIN_STOCK_BARS = 120
 
 
 def load_bars(connection: sqlite3.Connection, code: str, limit: int = 600) -> pd.DataFrame:
@@ -115,7 +119,7 @@ def candidate_metrics(frame: pd.DataFrame, benchmark_return20: float) -> dict[st
     if frame.empty or not {"close", "high", "low", "volume", "amount"}.issubset(frame.columns):
         return None
     enriched = add_indicators(frame)
-    if len(enriched) < 250:
+    if len(enriched) < MIN_STOCK_BARS:
         return None
     row = enriched.iloc[-1]
     if row.isna().any() or int(row["trade_status"]) != 1 or int(row["is_st"]) == 1:
@@ -212,7 +216,7 @@ def raw_factor_metrics(
     benchmark: pd.DataFrame,
     benchmark_return20: float,
 ) -> dict[str, object] | None:
-    if frame.empty or len(frame) < 250:
+    if frame.empty or len(frame) < MIN_STOCK_BARS:
         return None
     enriched = add_indicators(frame)
     row = enriched.iloc[-1]
@@ -389,6 +393,7 @@ def holding_recommendations(
     results = []
     for position in portfolio["positions"]:
         frame = load_bars(connection, position["code"])
+        frame = frame[frame["trade_date"] <= str(market["trade_date"])].reset_index(drop=True)
         if frame.empty:
             continue
         enriched = add_indicators(frame)
@@ -416,7 +421,7 @@ def holding_recommendations(
         elif below_ma20_twice:
             action, reasons = "SELL", ["连续两日收盘低于MA20"]
         elif market["regime"] == "RISK_OFF" and latest["close"] < latest["ma20"]:
-            action, reasons = "SELL", ["大盘风险关闭且个股跌破MA20"]
+            action, reasons = "SELL", ["市场风险较高且个股跌破MA20"]
         elif initial_stop and average - initial_stop > 0 and gain >= 2 * (average - initial_stop) / average:
             if not control or not control["partial_taken"]:
                 action, reasons = "REDUCE", ["收益已达2R，减仓一半"]
@@ -519,6 +524,7 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
     if index_frame.empty:
         raise RuntimeError("No HS300 index data. Run sync first.")
     benchmark = add_indicators(index_frame)
+    target_trade_date = str(benchmark["trade_date"].iloc[-1])
     benchmark_return20 = float(benchmark["return20"].iloc[-1])
     portfolio = calculate_portfolio(connection)
     set_setting(connection, "peak_equity", portfolio["peak_equity"])
@@ -529,8 +535,9 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
         "SELECT code, name, industry FROM securities WHERE is_hs300=1 AND active=1 ORDER BY code"
     ):
         frame = load_bars(connection, security["code"])
+        frame = frame[frame["trade_date"] <= target_trade_date].reset_index(drop=True)
         metrics = raw_factor_metrics(frame, benchmark, benchmark_return20)
-        if not metrics or metrics["trade_date"] != str(benchmark["trade_date"].iloc[-1]):
+        if not metrics or metrics["trade_date"] != target_trade_date:
             continue
         metrics.update(latest_financial_metrics(connection, security["code"], str(metrics["trade_date"])))
         frames[security["code"]] = frame
@@ -548,21 +555,27 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
     factor_table["risk_score"] = factor_table["risk_score_base"]
     factor_table = factor_table.sort_values("opportunity_base", ascending=False)
 
-    if use_kronos and not factor_table.empty:
-        from .kronos_service import KronosScorer
+    kronos_used = False
+    if use_kronos and kronos_available() and not factor_table.empty:
+        try:
+            from .kronos_service import KronosScorer
 
-        scorer = KronosScorer()
-        for index, item in factor_table.head(max(top_k * 2, 10)).iterrows():
-            try:
-                prediction = scorer.score(frames[str(item["code"])])
-                for key, value in prediction.items():
-                    factor_table.at[index, key] = value
-                kronos_risk = float(np.clip(50 - prediction["kronos_return"] / 0.05 * 50, 0, 100))
-                factor_table.at[index, "opportunity_score"] = item["opportunity_base"] * 0.90 + prediction["kronos_score"] * 0.10
-                factor_table.at[index, "risk_score"] = item["risk_score_base"] * 0.90 + kronos_risk * 0.10
-                factor_table.at[index, "confidence"] = min(100, item["confidence"] + 5)
-            except Exception as exc:
-                factor_table.at[index, "kronos_error"] = str(exc)
+            scorer = KronosScorer()
+        except Exception:
+            scorer = None
+        if scorer:
+            for index, item in factor_table.head(max(top_k * 2, 10)).iterrows():
+                try:
+                    prediction = scorer.score(frames[str(item["code"])])
+                    for key, value in prediction.items():
+                        factor_table.at[index, key] = value
+                    kronos_risk = float(np.clip(50 - prediction["kronos_return"] / 0.05 * 50, 0, 100))
+                    factor_table.at[index, "opportunity_score"] = item["opportunity_base"] * 0.90 + prediction["kronos_score"] * 0.10
+                    factor_table.at[index, "risk_score"] = item["risk_score_base"] * 0.90 + kronos_risk * 0.10
+                    factor_table.at[index, "confidence"] = min(100, item["confidence"] + 5)
+                    kronos_used = True
+                except Exception as exc:
+                    factor_table.at[index, "kronos_error"] = str(exc)
     factor_table = factor_table.sort_values("opportunity_score", ascending=False)
 
     drawdown = float(portfolio["drawdown"])
@@ -610,19 +623,29 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
     if any(item["action"] in {"SELL", "REDUCE"} for item in holdings):
         message = "优先处理持仓风险"
     elif buy_count:
-        message = "有一只股票满足条件买入"
+        message = "一只股票满足完整买入条件"
     elif market["regime"] == "RISK_OFF":
-        message = "大盘风险关闭，今日不开新仓"
+        message = "市场风险较高，今日不开新仓"
     elif market["regime"] == "CAUTIOUS":
-        message = "市场环境谨慎，今日不开新仓"
+        message = "市场环境偏谨慎，今日不开新仓"
     else:
-        message = "无完整买入信号，今日不操作"
+        message = "暂无完整买入信号，今日不操作"
     cursor = connection.execute(
         """
         INSERT INTO recommendation_runs(trade_date, status, market_regime, message, metrics_json)
         VALUES (?, 'COMPLETE', ?, ?, ?)
         """,
-        (market["trade_date"], market["regime"], message, json.dumps({"market": market, "portfolio": {k: v for k, v in portfolio.items() if k != "positions"}}, ensure_ascii=False)),
+        (
+            market["trade_date"], market["regime"], message,
+            json.dumps(
+                {
+                    "market": market,
+                    "portfolio": {k: v for k, v in portfolio.items() if k != "positions"},
+                    "kronos": {"requested": bool(use_kronos), "used": kronos_used},
+                },
+                ensure_ascii=False,
+            ),
+        ),
     )
     run_id = int(cursor.lastrowid)
     group_columns = [

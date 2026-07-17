@@ -9,7 +9,7 @@ from typing import Callable
 
 from flask import Flask, flash, redirect, render_template, request, url_for
 
-from .config import DATABASE_PATH
+from .config import DATABASE_PATH, kronos_available
 from .db import database, finish_job, get_setting, set_setting, start_job
 from .market_data import sync_market_data
 from .portfolio import calculate_portfolio, record_transaction
@@ -17,6 +17,22 @@ from .strategy import run_strategy
 
 
 JOB_LOCK = threading.Lock()
+
+ACTION_LABELS = {
+    "BUY": "买入",
+    "WATCH": "关注",
+    "HOLD": "持有",
+    "REDUCE": "减仓",
+    "SELL": "卖出",
+}
+MARKET_LABELS = {
+    "RISK_ON": "允许开仓",
+    "CAUTIOUS": "谨慎观望",
+    "RISK_OFF": "暂停开仓",
+}
+JOB_TYPE_LABELS = {"SYNC": "行情更新", "RECOMMEND": "策略计算"}
+JOB_STATUS_LABELS = {"RUNNING": "运行中", "COMPLETE": "已完成", "FAILED": "失败"}
+RISK_LABELS = {"HIGH_RISK": "高风险", "CAUTION": "需谨慎"}
 
 
 def normalize_code(value: str) -> str:
@@ -43,10 +59,16 @@ def launch_background(db_path: Path, job_type: str, callback: Callable) -> bool:
     if not JOB_LOCK.acquire(blocking=False):
         return False
 
+    try:
+        with database(db_path) as connection:
+            job_id = start_job(connection, job_type)
+    except Exception:
+        JOB_LOCK.release()
+        raise
+
     def worker() -> None:
         try:
             with database(db_path) as connection:
-                job_id = start_job(connection, job_type)
                 try:
                     result = callback(connection)
                     message = result if isinstance(result, dict) else {"result": str(result)}
@@ -65,6 +87,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.from_mapping(
         SECRET_KEY="local-stock-assistant",
         DATABASE=str(DATABASE_PATH),
+        KRONOS_AVAILABLE=kronos_available(),
     )
     if test_config:
         app.config.update(test_config)
@@ -79,6 +102,26 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.template_filter("pct")
     def pct(value: object) -> str:
         return f"{float(value or 0):+.2%}"
+
+    @app.template_filter("action_label")
+    def action_label(value: object) -> str:
+        return ACTION_LABELS.get(str(value), str(value))
+
+    @app.template_filter("market_label")
+    def market_label(value: object) -> str:
+        return MARKET_LABELS.get(str(value), str(value))
+
+    @app.template_filter("job_type_label")
+    def job_type_label(value: object) -> str:
+        return JOB_TYPE_LABELS.get(str(value), str(value))
+
+    @app.template_filter("job_status_label")
+    def job_status_label(value: object) -> str:
+        return JOB_STATUS_LABELS.get(str(value), str(value))
+
+    @app.template_filter("risk_label")
+    def risk_label(value: object) -> str:
+        return RISK_LABELS.get(str(value), str(value))
 
     @app.get("/")
     def dashboard():
@@ -161,6 +204,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             latest_job=latest_job,
             data_status=data_status,
             initial_capital=initial_capital,
+            kronos_available=app.config["KRONOS_AVAILABLE"],
         )
 
     @app.post("/transactions")

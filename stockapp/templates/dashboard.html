@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A股决策台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>A股决策台</h1>
+      <p>日线波段 · 手工成交 · 规则风控</p>
+    </div>
+    <div class="topbar-actions">
+      <form method="post" action="{{ url_for('start_sync') }}">
+        <button class="button secondary" type="submit" title="增量更新沪深300行情">更新行情</button>
+      </form>
+      <form method="post" action="{{ url_for('start_recommend') }}">
+        <label class="toggle"><input type="checkbox" name="use_kronos" value="1"><span>Kronos</span></label>
+        <button class="button primary" type="submit">生成今日建议</button>
+      </form>
+    </div>
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ category }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+
+    <section class="decision-band {{ (latest_run['market_regime'] if latest_run else 'EMPTY')|lower }}">
+      <div>
+        <span class="eyebrow">今日结论</span>
+        <h2>{{ latest_run['message'] if latest_run else '等待首次行情同步和策略运行' }}</h2>
+      </div>
+      <dl>
+        <div><dt>策略日期</dt><dd>{{ latest_run['trade_date'] if latest_run else '—' }}</dd></div>
+        <div><dt>市场状态</dt><dd>{{ latest_run['market_regime'] if latest_run else '未计算' }}{% if market_score is not none %} · {{ '%.0f'|format(market_score) }}分{% endif %}</dd></div>
+        <div><dt>数据日期</dt><dd>{{ data_status['latest_date'] or '无数据' }}</dd></div>
+      </dl>
+    </section>
+
+    <section class="metrics" aria-label="账户概览">
+      <article><span>账户权益</span><strong>{{ portfolio.equity|money }}</strong><small>初始 {{ portfolio.initial_capital|money }}</small></article>
+      <article><span>可用现金</span><strong>{{ portfolio.cash|money }}</strong><small>仓位 {{ portfolio.invested_ratio|pct }}</small></article>
+      <article><span>持仓市值</span><strong>{{ portfolio.market_value|money }}</strong><small>浮盈 {{ portfolio.unrealized_pnl|money }}</small></article>
+      <article class="{{ 'negative' if portfolio.drawdown < 0 else '' }}"><span>账户回撤</span><strong>{{ portfolio.drawdown|pct }}</strong><small>峰值 {{ portfolio.peak_equity|money }}</small></article>
+    </section>
+
+    <div class="workspace-grid">
+      <section class="panel recommendations-panel">
+        <div class="section-heading">
+          <div><span class="eyebrow">盘前报告</span><h2>操作与关注</h2></div>
+          {% if latest_job %}<span class="job-status {{ latest_job['status']|lower }}">{{ latest_job['job_type'] }} · {{ latest_job['status'] }}</span>{% endif %}
+        </div>
+        {% if recommendations %}
+          <div class="recommendation-list">
+          {% for item in recommendations %}
+            <article class="recommendation">
+              <div class="recommendation-main">
+                <span class="action {{ item.action|lower }}">{{ item.action }}</span>
+                <div><h3>{{ item.name }} <small>{{ item.code }}</small></h3><p>{{ item.reasons|join(' · ') }}</p></div>
+              </div>
+              <dl>
+                <div><dt>参考价</dt><dd>{{ '%.2f'|format(item.planned_price) if item.planned_price else '—' }}</dd></div>
+                <div><dt>数量</dt><dd>{{ item.quantity or '—' }}</dd></div>
+                <div><dt>止损</dt><dd>{{ '%.2f'|format(item.stop_price) if item.stop_price else '—' }}</dd></div>
+                <div><dt>机会 / 风险</dt><dd>{{ '%.1f'|format(item.score) if item.score else '—' }}{% if item.metrics.risk_score is defined %} / {{ '%.1f'|format(item.metrics.risk_score) }}{% endif %}</dd></div>
+              </dl>
+            </article>
+          {% endfor %}
+          </div>
+        {% else %}<div class="empty">运行行情同步后生成第一份盘前报告。</div>{% endif %}
+      </section>
+
+      <aside class="panel trade-panel">
+        <div class="section-heading"><div><span class="eyebrow">成交账本</span><h2>录入实际买卖</h2></div></div>
+        <form class="trade-form" method="post" action="{{ url_for('add_transaction') }}">
+          <div class="segmented">
+            <label><input type="radio" name="side" value="BUY" checked><span>买入</span></label>
+            <label><input type="radio" name="side" value="SELL"><span>卖出</span></label>
+          </div>
+          <label>成交日期<input type="date" name="trade_date" value="{{ today }}" required></label>
+          <label>股票代码<input name="code" placeholder="600519.SH" autocomplete="off" required></label>
+          <div class="two-columns">
+            <label>成交股数<input type="number" name="quantity" min="1" step="1" placeholder="500" required></label>
+            <label>成交均价<input type="number" name="price" min="0.01" step="0.01" placeholder="12.50" required></label>
+          </div>
+          <div class="two-columns">
+            <label>费用<input type="number" name="fee" min="0" step="0.01" value="5"></label>
+            <label>初始止损<input type="number" name="stop_price" min="0" step="0.01" placeholder="可选"></label>
+          </div>
+          <label>备注<input name="notes" maxlength="200" placeholder="订单或成交说明"></label>
+          <button class="button primary full" type="submit">确认记录成交</button>
+        </form>
+      </aside>
+    </div>
+
+    <section class="panel risk-panel">
+      <div class="section-heading"><div><span class="eyebrow">独立倒排</span><h2>风险提示</h2></div><span class="data-meta">低机会分不等于高风险</span></div>
+      {% if risk_alerts %}
+      <div class="risk-grid">
+        {% for item in risk_alerts %}
+        <article class="risk-item">
+          <div><span class="action {{ 'sell' if item.level == 'HIGH_RISK' else 'watch' }}">{{ item.level }}</span><h3>{{ item.name }} <small>{{ item.code }}</small></h3></div>
+          <strong>{{ '%.1f'|format(item.risk_score) }}</strong>
+          <p>{{ item.reasons|join(' · ') }}</p>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}<div class="empty">运行新版推荐后生成独立风险榜。</div>{% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><span class="eyebrow">当前风险</span><h2>持仓</h2></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>股票</th><th>股数</th><th>成本</th><th>最新价</th><th>市值</th><th>浮动收益</th><th>当前止损</th></tr></thead>
+          <tbody>
+          {% for item in portfolio.positions %}
+            <tr><td><strong>{{ item.name }}</strong><small>{{ item.code }}</small></td><td>{{ item.quantity }}</td><td>{{ item.average_cost|money }}</td><td>{{ item.market_price|money if item.market_price else '—' }}</td><td>{{ item.market_value|money }}</td><td class="{{ 'positive' if item.unrealized_return >= 0 else 'negative' }}">{{ item.unrealized_return|pct }}</td><td>{{ item.current_stop|money if item.current_stop else '—' }}</td></tr>
+          {% else %}<tr><td class="empty-row" colspan="7">暂无持仓</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><span class="eyebrow">审计记录</span><h2>最近成交</h2></div><span class="data-meta">{{ data_status['securities'] or 0 }} 只证券 · {{ data_status['bars'] or 0 }} 根日K</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>日期</th><th>股票</th><th>方向</th><th>股数</th><th>价格</th><th>费用</th><th>备注</th></tr></thead>
+          <tbody>
+          {% for item in transactions %}
+            <tr><td>{{ item.trade_date }}</td><td><strong>{{ item.name }}</strong><small>{{ item.code }}</small></td><td><span class="action {{ item.side|lower }}">{{ item.side }}</span></td><td>{{ item.quantity }}</td><td>{{ item.price|money }}</td><td>{{ item.fee|money }}</td><td>{{ item.notes or '—' }}</td></tr>
+          {% else %}<tr><td class="empty-row" colspan="7">暂无成交记录</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% if not transactions %}
+    <details class="settings">
+      <summary>账户设置</summary>
+      <form method="post" action="{{ url_for('update_settings') }}"><label>初始资金<input type="number" name="initial_capital" min="1" step="0.01" value="{{ initial_capital }}"></label><button class="button secondary" type="submit">更新</button></form>
+    </details>
+    {% endif %}
+  </main>
+</body>
+</html>

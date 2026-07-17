@@ -1,0 +1,11 @@
+[Unit]
+Description=Run A-share recommendations on trading-day mornings
+
+[Timer]
+OnCalendar=Mon..Fri 08:10:00 Asia/Shanghai
+Persistent=true
+Unit=stock-assistant-daily.service
+
+[Install]
+WantedBy=timers.target
+

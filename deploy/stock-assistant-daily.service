@@ -1,0 +1,12 @@
+[Unit]
+Description=Update A-share data and generate daily recommendations
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=stock
+WorkingDirectory=/opt/stock-assistant
+ExecStart=/opt/miniconda3/bin/conda run --no-capture-output -n stock python -m stockapp.cli sync
+ExecStart=/opt/miniconda3/bin/conda run --no-capture-output -n stock python -m stockapp.cli recommend --kronos
+Environment=STOCK_ASSISTANT_DATA=/opt/stock-assistant/data
+

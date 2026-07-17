@@ -1,0 +1,15 @@
+[Unit]
+Description=A-share decision dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=stock
+WorkingDirectory=/opt/stock-assistant
+ExecStart=/opt/miniconda3/bin/conda run --no-capture-output -n stock python run.py
+Restart=on-failure
+Environment=STOCK_ASSISTANT_DATA=/opt/stock-assistant/data
+
+[Install]
+WantedBy=multi-user.target
+

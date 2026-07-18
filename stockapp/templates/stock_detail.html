@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ security.name }} · A股决策台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script defer src="{{ url_for('static', filename='vendor/lightweight-charts.standalone.production.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='stock-chart.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-navigation">
+      <a class="brand" href="{{ url_for('dashboard') }}">A股决策台</a>
+      <nav aria-label="主导航">
+        <a href="{{ url_for('dashboard') }}">决策台</a>
+        <a class="active" href="{{ url_for('stock_list') }}">股票池</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ category }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+
+    <section class="stock-title-band">
+      <div>
+        <a class="back-link" href="{{ url_for('stock_list') }}">返回股票池</a>
+        <h1>{{ security.name }} <small>{{ security.code }}</small></h1>
+        <p>{{ security.industry or '未分类' }}{% if factor %} · 评分日期 {{ factor.score_date }}{% endif %}</p>
+      </div>
+      <div class="stock-title-actions">
+        <form method="post" action="{{ url_for('update_watchlist', code=security.code) }}">
+          <input type="hidden" name="action" value="{{ 'remove' if is_watched else 'add' }}">
+          <input type="hidden" name="return_to" value="{{ url_for('stock_detail', code=security.code) }}">
+          <button class="button watch-detail-button {{ 'active' if is_watched else '' }}" type="submit">{{ '★ 已关注' if is_watched else '☆ 加关注' }}</button>
+        </form>
+        {% if recommendation %}
+        <div class="stock-action-summary">
+        <span class="action {{ recommendation.action|lower }}">{{ recommendation.action|action_label }}</span>
+        <p>{{ recommendation.reasons|join(' · ') }}</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="metrics stock-metrics" aria-label="股票概览">
+      <article><span>最新收盘</span><strong>{{ '%.2f'|format(latest.close) if latest else '—' }}</strong><small class="{{ 'positive' if daily_change is not none and daily_change >= 0 else 'negative' }}">{{ daily_change|pct if daily_change is not none else '—' }}</small></article>
+      <article><span>机会分</span><strong>{{ '%.1f'|format(factor.opportunity_score) if factor else '—' }}</strong><small>越高表示机会特征越强</small></article>
+      <article><span>风险分</span><strong class="{{ 'negative' if factor and factor.risk_score >= 65 else '' }}">{{ '%.1f'|format(factor.risk_score) if factor else '—' }}</strong><small>越高表示风险越高</small></article>
+      <article><span>数据完整度</span><strong>{{ '%.1f'|format(factor.confidence) if factor else '—' }}</strong><small>不是上涨概率</small></article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="chart-toolbar">
+        <div><span class="eyebrow">价格与成交量</span><h2>日K线</h2></div>
+        <fieldset class="ma-controls">
+          <legend>均线</legend>
+          {% for days, color, enabled in [(5, '#275d8c', true), (10, '#95630d', false), (20, '#176b4d', true), (30, '#3f6c74', false), (60, '#b33a32', true), (120, '#6b5f8d', false)] %}
+          <label style="--ma-color: {{ color }}"><input class="ma-toggle" type="checkbox" value="{{ days }}" {% if enabled %}checked{% endif %}><span></span>MA{{ days }}</label>
+          {% endfor %}
+        </fieldset>
+      </div>
+      <div class="chart-legend" data-chart-legend>移动光标查看 OHLC</div>
+      <div id="stock-chart" class="stock-chart" aria-label="{{ security.name }} 日K线图"></div>
+      <div class="chart-error" data-chart-error hidden>图表加载失败，请刷新页面。</div>
+    </section>
+
+    {% if factor %}
+    <section class="panel factor-panel">
+      <div class="section-heading"><div><span class="eyebrow">评分构成</span><h2>因子分组</h2></div></div>
+      <div class="factor-list">
+        {% for key, label in factor_group_labels %}
+        {% set value = factor.groups.get(key) %}
+        <div class="factor-row">
+          <span>{{ label }}</span>
+          <div class="factor-track"><i style="width: {{ value if value is not none else 0 }}%"></i></div>
+          <strong>{{ '%.1f'|format(value) if value is not none else '—' }}</strong>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </main>
+  <script id="stock-chart-data" type="application/json">{{ chart_data|tojson }}</script>
+</body>
+</html>

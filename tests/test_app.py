@@ -20,6 +20,61 @@ class WebAppTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def seed_stock_scores(self) -> None:
+        groups = json.dumps(
+            {
+                "trend_score": 80,
+                "momentum_score": 70,
+                "volume_score": 60,
+                "volatility_score": 75,
+                "valuation_score": 55,
+                "quality_score": 65,
+            }
+        )
+        with database(self.db_path) as connection:
+            connection.executemany(
+                """
+                INSERT INTO securities(code, name, market, kind, is_hs300, industry)
+                VALUES (?, ?, 'sz', 'stock', 1, ?)
+                """,
+                [
+                    ("sz.000001", "低风险股", "银行"),
+                    ("sz.000002", "高风险股", "地产"),
+                ],
+            )
+            run_id = connection.execute(
+                """
+                INSERT INTO recommendation_runs(
+                  trade_date, status, market_regime, message, metrics_json
+                ) VALUES ('2026-07-17', 'COMPLETE', 'RISK_ON', '测试', '{}')
+                """
+            ).lastrowid
+            connection.executemany(
+                """
+                INSERT INTO factor_snapshots(
+                  run_id, code, opportunity_score, risk_score, confidence,
+                  group_scores_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (run_id, "sz.000001", 82, 20, 90, groups, json.dumps({"price": 12.2, "return20": 0.08})),
+                    (run_id, "sz.000002", 55, 88, 75, groups, json.dumps({"price": 8.4, "return20": -0.12})),
+                ],
+            )
+            for code, base in (("sz.000001", 12.0), ("sz.000002", 8.0)):
+                connection.executemany(
+                    """
+                    INSERT INTO daily_bars(
+                      code, trade_date, open, high, low, close, volume, amount
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (code, "2026-07-16", base, base + .3, base - .2, base + .1, 1_000_000, 10_000_000),
+                        (code, "2026-07-17", base + .1, base + .5, base, base + .2, 1_200_000, 12_000_000),
+                    ],
+                )
+            connection.commit()
+
     def test_dashboard_and_transaction_lifecycle(self) -> None:
         self.assertEqual(self.client.get("/").status_code, 200)
         response = self.client.post(
@@ -93,6 +148,58 @@ class WebAppTest(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("使用 Kronos", response.get_data(as_text=True))
+
+    def test_stock_pool_search_and_risk_sort(self) -> None:
+        self.seed_stock_scores()
+        response = self.client.get("/stocks?sort=risk_desc")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(body.index("高风险股"), body.index("低风险股"))
+
+        response = self.client.get("/stocks?q=000001")
+        body = response.get_data(as_text=True)
+        self.assertIn("低风险股", body)
+        self.assertNotIn("高风险股", body)
+
+    def test_stock_detail_contains_chart_data_and_ma_controls(self) -> None:
+        self.seed_stock_scores()
+        response = self.client.get("/stocks/sz.000001")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("低风险股", body)
+        self.assertIn('id="stock-chart-data"', body)
+        self.assertIn("2026-07-17", body)
+        self.assertIn("MA5", body)
+        self.assertIn("MA120", body)
+
+    def test_watchlist_add_filter_and_remove(self) -> None:
+        self.seed_stock_scores()
+        response = self.client.post(
+            "/watchlist/sz.000001",
+            data={"action": "add", "return_to": "/stocks?watched=1"},
+            follow_redirects=True,
+        )
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("低风险股", body)
+        self.assertNotIn("高风险股", body)
+        self.assertIn("取消关注 低风险股", body)
+        with database(self.db_path) as connection:
+            watched = connection.execute(
+                "SELECT code FROM watchlist"
+            ).fetchall()
+        self.assertEqual([row["code"] for row in watched], ["sz.000001"])
+
+        response = self.client.post(
+            "/watchlist/sz.000001",
+            data={"action": "remove", "return_to": "/stocks/sz.000001"},
+            follow_redirects=True,
+        )
+        body = response.get_data(as_text=True)
+        self.assertIn("☆ 加关注", body)
+        with database(self.db_path) as connection:
+            count = connection.execute("SELECT COUNT(*) count FROM watchlist").fetchone()
+        self.assertEqual(count["count"], 0)
 
 
 if __name__ == "__main__":

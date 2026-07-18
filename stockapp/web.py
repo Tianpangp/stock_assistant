@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, url_for
 
 from .config import DATABASE_PATH, kronos_available
 from .db import database, finish_job, get_setting, set_setting, start_job
@@ -33,6 +33,22 @@ MARKET_LABELS = {
 JOB_TYPE_LABELS = {"SYNC": "行情更新", "RECOMMEND": "策略计算"}
 JOB_STATUS_LABELS = {"RUNNING": "运行中", "COMPLETE": "已完成", "FAILED": "失败"}
 RISK_LABELS = {"HIGH_RISK": "高风险", "CAUTION": "需谨慎"}
+STOCK_SORTS = {
+    "opportunity_desc": ("机会分：高到低", "f.opportunity_score DESC"),
+    "opportunity_asc": ("机会分：低到高", "f.opportunity_score ASC"),
+    "risk_desc": ("风险分：高到低", "f.risk_score DESC"),
+    "risk_asc": ("风险分：低到高", "f.risk_score ASC"),
+    "confidence_desc": ("置信度：高到低", "f.confidence DESC"),
+    "confidence_asc": ("置信度：低到高", "f.confidence ASC"),
+}
+FACTOR_GROUP_LABELS = (
+    ("trend_score", "趋势"),
+    ("momentum_score", "动量"),
+    ("volume_score", "量价"),
+    ("volatility_score", "波动质量"),
+    ("valuation_score", "估值"),
+    ("quality_score", "财务质量"),
+)
 
 
 def normalize_code(value: str) -> str:
@@ -206,6 +222,175 @@ def create_app(test_config: dict | None = None) -> Flask:
             initial_capital=initial_capital,
             kronos_available=app.config["KRONOS_AVAILABLE"],
         )
+
+    @app.get("/stocks")
+    def stock_list():
+        query = request.args.get("q", "").strip()
+        watched_only = request.args.get("watched") == "1"
+        sort_key = request.args.get("sort", "opportunity_desc")
+        if sort_key not in STOCK_SORTS:
+            sort_key = "opportunity_desc"
+        with database(db_path) as connection:
+            factor_run = connection.execute(
+                """
+                SELECT r.id, r.trade_date, r.generated_at
+                FROM recommendation_runs r
+                WHERE EXISTS (SELECT 1 FROM factor_snapshots f WHERE f.run_id=r.id)
+                ORDER BY r.id DESC LIMIT 1
+                """
+            ).fetchone()
+            stocks = []
+            if factor_run:
+                params: list[object] = [factor_run["id"]]
+                conditions = []
+                if query:
+                    conditions.append("(s.name LIKE ? OR s.code LIKE ?)")
+                    pattern = f"%{query}%"
+                    params.extend([pattern, pattern])
+                if watched_only:
+                    conditions.append("w.code IS NOT NULL")
+                where = "" if not conditions else "AND " + " AND ".join(conditions)
+                rows = connection.execute(
+                    f"""
+                    SELECT f.code, s.name, s.industry, f.opportunity_score,
+                           f.risk_score, f.confidence, f.metrics_json,
+                           CASE WHEN w.code IS NULL THEN 0 ELSE 1 END AS is_watched
+                    FROM factor_snapshots f
+                    JOIN securities s ON s.code=f.code
+                    LEFT JOIN watchlist w ON w.code=f.code
+                    WHERE f.run_id=? AND s.is_hs300=1 {where}
+                    ORDER BY {STOCK_SORTS[sort_key][1]}, s.code
+                    """,
+                    params,
+                ).fetchall()
+                for row in rows:
+                    metrics = parse_json(row["metrics_json"], {})
+                    stocks.append(
+                        {
+                            **dict(row),
+                            "price": metrics.get("price") if isinstance(metrics, dict) else None,
+                            "return20": metrics.get("return20") if isinstance(metrics, dict) else None,
+                        }
+                    )
+        return render_template(
+            "stocks.html",
+            stocks=stocks,
+            query=query,
+            watched_only=watched_only,
+            sort_key=sort_key,
+            sort_options=STOCK_SORTS,
+            factor_run=factor_run,
+        )
+
+    @app.get("/stocks/<path:code>")
+    def stock_detail(code: str):
+        try:
+            normalized = normalize_code(code)
+        except ValueError:
+            abort(404)
+        with database(db_path) as connection:
+            security = connection.execute(
+                "SELECT * FROM securities WHERE code=?", (normalized,)
+            ).fetchone()
+            if not security:
+                abort(404)
+            factor = connection.execute(
+                """
+                SELECT f.*, r.trade_date AS score_date
+                FROM factor_snapshots f
+                JOIN recommendation_runs r ON r.id=f.run_id
+                WHERE f.code=? ORDER BY f.run_id DESC LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+            bars = connection.execute(
+                """
+                SELECT trade_date, open, high, low, close, volume, amount
+                FROM daily_bars WHERE code=?
+                ORDER BY trade_date DESC LIMIT 360
+                """,
+                (normalized,),
+            ).fetchall()
+            recommendation = connection.execute(
+                """
+                SELECT rec.*, r.trade_date AS recommendation_date
+                FROM recommendations rec
+                JOIN recommendation_runs r ON r.id=rec.run_id
+                WHERE rec.code=? ORDER BY rec.run_id DESC LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+            is_watched = connection.execute(
+                "SELECT 1 FROM watchlist WHERE code=?", (normalized,)
+            ).fetchone() is not None
+        ordered_bars = list(reversed(bars))
+        chart_data = [
+            {
+                "time": row["trade_date"],
+                "open": row["open"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close"],
+                "volume": row["volume"],
+            }
+            for row in ordered_bars
+        ]
+        factor_data = None
+        if factor:
+            factor_data = {
+                **dict(factor),
+                "groups": parse_json(factor["group_scores_json"], {}),
+                "metrics": parse_json(factor["metrics_json"], {}),
+            }
+        recommendation_data = None
+        if recommendation:
+            recommendation_data = {
+                **dict(recommendation),
+                "reasons": parse_json(recommendation["reasons_json"], []),
+            }
+        latest = chart_data[-1] if chart_data else None
+        previous = chart_data[-2] if len(chart_data) > 1 else None
+        daily_change = (
+            latest["close"] / previous["close"] - 1 if latest and previous else None
+        )
+        return render_template(
+            "stock_detail.html",
+            security=security,
+            factor=factor_data,
+            recommendation=recommendation_data,
+            is_watched=is_watched,
+            chart_data=chart_data,
+            latest=latest,
+            daily_change=daily_change,
+            factor_group_labels=FACTOR_GROUP_LABELS,
+        )
+
+    @app.post("/watchlist/<path:code>")
+    def update_watchlist(code: str):
+        try:
+            normalized = normalize_code(code)
+        except ValueError:
+            abort(404)
+        action = request.form.get("action", "add")
+        with database(db_path) as connection:
+            security = connection.execute(
+                "SELECT name FROM securities WHERE code=?", (normalized,)
+            ).fetchone()
+            if not security:
+                abort(404)
+            if action == "remove":
+                connection.execute("DELETE FROM watchlist WHERE code=?", (normalized,))
+                message = f"已取消关注 {security['name']}。"
+            else:
+                connection.execute(
+                    "INSERT OR IGNORE INTO watchlist(code) VALUES (?)", (normalized,)
+                )
+                message = f"已关注 {security['name']}。"
+        flash(message, "success")
+        return_to = request.form.get("return_to", "")
+        if not return_to.startswith("/") or return_to.startswith("//"):
+            return_to = url_for("stock_detail", code=normalized)
+        return redirect(return_to)
 
     @app.post("/transactions")
     def add_transaction():

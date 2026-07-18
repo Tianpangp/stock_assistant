@@ -9,9 +9,12 @@
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>A股决策台</h1>
-      <p>日线量化选股 · 手工成交 · 规则风控</p>
+    <div class="brand-navigation">
+      <div><a class="brand" href="{{ url_for('dashboard') }}">A股决策台</a><p>日线量化选股 · 手工成交 · 规则风控</p></div>
+      <nav aria-label="主导航">
+        <a class="active" href="{{ url_for('dashboard') }}">决策台</a>
+        <a href="{{ url_for('stock_list') }}">股票池</a>
+      </nav>
     </div>
     <div class="topbar-actions">
       <form method="post" action="{{ url_for('start_sync') }}" data-background-job data-job-label="正在更新日线数据">
@@ -62,7 +65,7 @@
             <article class="recommendation">
               <div class="recommendation-main">
                 <span class="action {{ item.action|lower }}">{{ item.action|action_label }}</span>
-                <div><h3>{{ item.name }} <small>{{ item.code }}</small></h3><p>{{ item.reasons|join(' · ') }}</p></div>
+                <div><h3><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}">{{ item.name }} <small>{{ item.code }}</small></a></h3><p>{{ item.reasons|join(' · ') }}</p></div>
               </div>
               <dl>
                 <div><dt>参考价</dt><dd>{{ '%.2f'|format(item.planned_price) if item.planned_price else '—' }}</dd></div>
@@ -105,7 +108,7 @@
       <div class="risk-grid">
         {% for item in risk_alerts %}
         <article class="risk-item">
-          <div><span class="action {{ 'sell' if item.level == 'HIGH_RISK' else 'watch' }}">{{ item.level|risk_label }}</span><h3>{{ item.name }} <small>{{ item.code }}</small></h3></div>
+          <div><span class="action {{ 'sell' if item.level == 'HIGH_RISK' else 'watch' }}">{{ item.level|risk_label }}</span><h3><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}">{{ item.name }} <small>{{ item.code }}</small></a></h3></div>
           <strong>{{ '%.1f'|format(item.risk_score) }}</strong>
           <p>{{ item.reasons|join(' · ') }}</p>
         </article>
@@ -121,7 +124,7 @@
           <thead><tr><th>股票</th><th>股数</th><th>成本</th><th>最新价</th><th>市值</th><th>浮动收益</th><th>当前止损</th></tr></thead>
           <tbody>
           {% for item in portfolio.positions %}
-            <tr><td><strong>{{ item.name }}</strong><small>{{ item.code }}</small></td><td>{{ item.quantity }}</td><td>{{ item.average_cost|money }}</td><td>{{ item.market_price|money if item.market_price else '—' }}</td><td>{{ item.market_value|money }}</td><td class="{{ 'positive' if item.unrealized_return >= 0 else 'negative' }}">{{ item.unrealized_return|pct }}</td><td>{{ item.current_stop|money if item.current_stop else '—' }}</td></tr>
+            <tr><td><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}</small></a></td><td>{{ item.quantity }}</td><td>{{ item.average_cost|money }}</td><td>{{ item.market_price|money if item.market_price else '—' }}</td><td>{{ item.market_value|money }}</td><td class="{{ 'positive' if item.unrealized_return >= 0 else 'negative' }}">{{ item.unrealized_return|pct }}</td><td>{{ item.current_stop|money if item.current_stop else '—' }}</td></tr>
           {% else %}<tr><td class="empty-row" colspan="7">暂无持仓</td></tr>{% endfor %}
           </tbody>
         </table>
@@ -135,7 +138,7 @@
           <thead><tr><th>日期</th><th>股票</th><th>方向</th><th>股数</th><th>价格</th><th>费用</th><th>备注</th></tr></thead>
           <tbody>
           {% for item in transactions %}
-            <tr><td>{{ item.trade_date }}</td><td><strong>{{ item.name }}</strong><small>{{ item.code }}</small></td><td><span class="action {{ item.side|lower }}">{{ item.side }}</span></td><td>{{ item.quantity }}</td><td>{{ item.price|money }}</td><td>{{ item.fee|money }}</td><td>{{ item.notes or '—' }}</td></tr>
+            <tr><td>{{ item.trade_date }}</td><td><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}</small></a></td><td><span class="action {{ item.side|lower }}">{{ item.side|action_label }}</span></td><td>{{ item.quantity }}</td><td>{{ item.price|money }}</td><td>{{ item.fee|money }}</td><td>{{ item.notes or '—' }}</td></tr>
           {% else %}<tr><td class="empty-row" colspan="7">暂无成交记录</td></tr>{% endfor %}
           </tbody>
         </table>

@@ -3,8 +3,10 @@ document.querySelectorAll('form').forEach((form) => {
     const button = form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = true;
-      button.dataset.label = button.textContent;
-      button.textContent = '处理中…';
+      if (!button.hasAttribute('data-icon-button')) {
+        button.dataset.label = button.textContent;
+        button.textContent = '处理中…';
+      }
     }
 
     if (form.hasAttribute('data-background-job')) {
@@ -24,3 +26,15 @@ if (notices.length) {
 if (document.querySelector('.job-status.running')) {
   window.setTimeout(() => window.location.reload(), 3000);
 }
+
+document.querySelectorAll('[data-stock-row]').forEach((row) => {
+  const openStock = () => {
+    if (row.dataset.href) window.location.assign(row.dataset.href);
+  };
+  row.addEventListener('click', (event) => {
+    if (!event.target.closest('a, button, input, select')) openStock();
+  });
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openStock();
+  });
+});

@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(trade_date, id);
 
+CREATE TABLE IF NOT EXISTS watchlist (
+    code TEXT PRIMARY KEY REFERENCES securities(code) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS position_controls (
     code TEXT PRIMARY KEY REFERENCES securities(code) ON DELETE CASCADE,
     opened_date TEXT NOT NULL,

@@ -42,12 +42,12 @@ STOCK_SORTS = {
     "confidence_asc": ("置信度：低到高", "f.confidence ASC"),
 }
 FACTOR_GROUP_LABELS = (
-    ("trend_score", "趋势"),
-    ("momentum_score", "动量"),
-    ("volume_score", "量价"),
-    ("volatility_score", "波动质量"),
-    ("valuation_score", "估值"),
-    ("quality_score", "财务质量"),
+    ("trend_score", "趋势", "反映股价当前是否处于持续、明确的上升方向。"),
+    ("momentum_score", "动量", "反映股票近期相对市场的上涨力量是否充足。"),
+    ("volume_score", "量价", "反映价格变化是否得到成交活跃度和资金行为支持。"),
+    ("volatility_score", "波动质量", "反映当前波动是否稳定且便于控制风险。"),
+    ("valuation_score", "估值", "反映股票相对同行业公司是否更便宜。"),
+    ("quality_score", "财务质量", "反映公司的盈利、增长、现金流和负债状况是否健康。"),
 )
 
 

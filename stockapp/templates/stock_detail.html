@@ -71,10 +71,10 @@
     <section class="panel factor-panel">
       <div class="section-heading"><div><span class="eyebrow">评分构成</span><h2>因子分组</h2></div></div>
       <div class="factor-list">
-        {% for key, label in factor_group_labels %}
+        {% for key, label, description in factor_group_labels %}
         {% set value = factor.groups.get(key) %}
         <div class="factor-row">
-          <span>{{ label }}</span>
+          <div class="factor-copy"><span>{{ label }}</span><small>{{ description }}</small></div>
           <div class="factor-track"><i style="width: {{ value if value is not none else 0 }}%"></i></div>
           <strong>{{ '%.1f'|format(value) if value is not none else '—' }}</strong>
         </div>

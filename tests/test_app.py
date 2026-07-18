@@ -172,6 +172,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("2026-07-17", body)
         self.assertIn("MA5", body)
         self.assertIn("MA120", body)
+        self.assertIn("反映股价当前是否处于持续、明确的上升方向。", body)
+        self.assertIn("反映公司的盈利、增长、现金流和负债状况是否健康。", body)
 
     def test_stock_detail_contains_complete_price_history(self) -> None:
         self.seed_stock_scores()

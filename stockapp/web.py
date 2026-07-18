@@ -307,7 +307,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 """
                 SELECT trade_date, open, high, low, close, volume, amount
                 FROM daily_bars WHERE code=?
-                ORDER BY trade_date DESC LIMIT 360
+                ORDER BY trade_date
                 """,
                 (normalized,),
             ).fetchall()
@@ -323,7 +323,6 @@ def create_app(test_config: dict | None = None) -> Flask:
             is_watched = connection.execute(
                 "SELECT 1 FROM watchlist WHERE code=?", (normalized,)
             ).fetchone() is not None
-        ordered_bars = list(reversed(bars))
         chart_data = [
             {
                 "time": row["trade_date"],
@@ -333,7 +332,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "close": row["close"],
                 "volume": row["volume"],
             }
-            for row in ordered_bars
+            for row in bars
         ]
         factor_data = None
         if factor:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from stockapp import create_app
@@ -171,6 +172,45 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("2026-07-17", body)
         self.assertIn("MA5", body)
         self.assertIn("MA120", body)
+
+    def test_stock_detail_contains_complete_price_history(self) -> None:
+        self.seed_stock_scores()
+        first_date = date(2020, 1, 1)
+        with database(self.db_path) as connection:
+            connection.executemany(
+                """
+                INSERT INTO daily_bars(
+                  code, trade_date, open, high, low, close, volume, amount
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "sz.000001",
+                        (first_date + timedelta(days=index)).isoformat(),
+                        10,
+                        10.5,
+                        9.5,
+                        10.2,
+                        1_000_000,
+                        10_000_000,
+                    )
+                    for index in range(361)
+                ],
+            )
+            connection.commit()
+
+        response = self.client.get("/stocks/sz.000001")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"time": "2020-01-01"', body)
+        self.assertIn('"time": "2026-07-17"', body)
+
+        chart_script = (
+            Path(__file__).parents[1] / "stockapp" / "static" / "stock-chart.js"
+        ).read_text()
+        self.assertIn("setVisibleLogicalRange", chart_script)
+        self.assertIn("Math.min(100, bars.length)", chart_script)
+        self.assertNotIn("chart.timeScale().fitContent()", chart_script)
 
     def test_watchlist_add_filter_and_remove(self) -> None:
         self.seed_stock_scores()

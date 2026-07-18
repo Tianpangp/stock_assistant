@@ -107,7 +107,13 @@
       else formatLegend(bars[bars.length - 1]);
     });
 
-    chart.timeScale().fitContent();
+    const initialVisibleBars = Math.min(100, bars.length);
+    chart.timeScale().setVisibleLogicalRange({
+      from: bars.length - initialVisibleBars,
+      to: bars.length - 1,
+    });
+    container.dataset.barCount = String(bars.length);
+    container.dataset.initialVisibleBars = String(initialVisibleBars);
     const observer = new ResizeObserver(() => {
       chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
     });

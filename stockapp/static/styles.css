@@ -34,6 +34,7 @@ main { width: min(1440px, calc(100% - 36px)); margin: 22px auto 60px; }
 .button:disabled { cursor: wait; opacity: .65; }
 .button.primary { background: #2a7a58; color: white; }
 .button.secondary { background: transparent; color: inherit; border-color: #617069; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .button.full { width: 100%; margin-top: 4px; }
 .toggle { display: flex; align-items: center; gap: 5px; color: #c9d3cc; font-size: 12px; cursor: pointer; }
 .toggle input { accent-color: #52a77e; }
@@ -97,6 +98,7 @@ input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 3px rg
 .segmented span { display: block; padding: 8px; }
 .segmented input:checked + span { background: #e4ece7; color: var(--ink); font-weight: 700; }
 .table-wrap { overflow-x: auto; }
+.table-action { white-space: nowrap; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 th { color: var(--muted); background: #fafbfa; font-size: 11px; font-weight: 650; }
@@ -120,6 +122,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .text-link, .back-link { color: var(--green); text-decoration: none; }
 .text-link { align-self: center; padding: 8px 2px; }
 .text-link:hover, .back-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.transaction-edit-page { width: min(860px, calc(100% - 36px)); }
+.transaction-edit-panel { margin-top: 0; }
+.transaction-edit-form { gap: 16px; }
+.transaction-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
 .stock-table-panel { margin-top: 14px; }
 .stock-table tbody tr[data-stock-row] { cursor: pointer; }
 .stock-table tbody tr[data-stock-row]:hover, .stock-table tbody tr[data-stock-row]:focus { background: #f5f8f6; outline: none; }
@@ -147,6 +154,12 @@ tbody tr:last-child td { border-bottom: 0; }
 .chart-panel { overflow: hidden; }
 .chart-toolbar { min-height: 72px; padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .chart-toolbar h2 { font-size: 16px; }
+.chart-tools { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 18px; }
+.chart-tools form { margin: 0; }
+.forecast-button { min-height: 34px; padding: 6px 10px; border-color: #d3b366; background: var(--amber-soft); color: var(--amber); }
+.forecast-status, .forecast-unavailable { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.forecast-status { color: var(--amber); font-weight: 700; }
+.forecast-status i { width: 12px; height: 12px; border: 1px solid #a56d08; background: rgba(197, 138, 24, .55); }
 .ma-controls { min-width: 0; margin: 0; padding: 0; border: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px 12px; }
 .ma-controls legend { float: left; margin-right: 4px; color: var(--muted); font-size: 11px; }
 .ma-controls label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; cursor: pointer; }
@@ -195,6 +208,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .stock-title-actions { max-width: none; align-items: flex-start; justify-content: flex-start; flex-direction: column; }
   .stock-action-summary { max-width: none; text-align: left; }
   .chart-toolbar { align-items: flex-start; flex-direction: column; }
+  .chart-tools { width: 100%; align-items: flex-start; justify-content: flex-start; flex-direction: column; }
   .stock-chart { height: 500px; }
 }
 
@@ -222,6 +236,9 @@ tbody tr:last-child td { border-bottom: 0; }
   .stock-title-band { padding: 16px; }
   .stock-title-band h1 { font-size: 21px; }
   .stock-chart { height: 430px; }
+  .transaction-edit-page { width: calc(100% - 24px); }
+  .transaction-fields { grid-template-columns: 1fr; }
+  .form-actions .button { flex: 1; }
   .chart-legend { white-space: nowrap; overflow-x: auto; }
   .factor-row { grid-template-columns: minmax(0, 1fr) 42px; gap: 8px 9px; padding: 9px 0; }
   .factor-copy { grid-column: 1 / -1; }

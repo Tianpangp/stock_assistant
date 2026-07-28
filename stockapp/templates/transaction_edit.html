@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>修改成交 · A股决策台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-navigation">
+      <div><a class="brand" href="{{ url_for('dashboard') }}">A股决策台</a><p>日线量化选股 · 手工成交 · 规则风控</p></div>
+      <nav aria-label="主导航">
+        <a class="active" href="{{ url_for('dashboard') }}">决策台</a>
+        <a href="{{ url_for('stock_list') }}">股票池</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="transaction-edit-page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ category }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+
+    <div class="page-heading">
+      <div><span class="eyebrow">成交账本</span><h1>修改成交记录</h1></div>
+      <a class="back-link" href="{{ url_for('dashboard') }}">返回决策台</a>
+    </div>
+
+    <section class="panel transaction-edit-panel">
+      <div class="section-heading">
+        <div><span class="eyebrow">记录 #{{ transaction.id }}</span><h2>{{ transaction.name }}</h2></div>
+      </div>
+      <form class="trade-form transaction-edit-form" method="post" data-stock-validation>
+        <div class="segmented">
+          <label><input type="radio" name="side" value="BUY" {% if transaction.side == 'BUY' %}checked{% endif %}><span>买入</span></label>
+          <label><input type="radio" name="side" value="SELL" {% if transaction.side == 'SELL' %}checked{% endif %}><span>卖出</span></label>
+        </div>
+        <div class="transaction-fields">
+          <label>成交日期<input type="date" name="trade_date" value="{{ transaction.trade_date }}" required></label>
+          <label>股票代码<input name="code" value="{{ transaction.code }}" autocomplete="off" required></label>
+          <label>成交股数<input type="number" name="quantity" min="1" step="1" value="{{ transaction.quantity }}" required></label>
+          <label>成交均价<input type="number" name="price" min="0.01" step="0.01" value="{{ transaction.price }}" required></label>
+          <label>交易费用<input type="number" name="fee" min="0" step="0.01" value="{{ transaction.fee or 0 }}"></label>
+          <label>初始止损<input type="number" name="stop_price" min="0" step="0.01" value="{{ transaction.stop_price if transaction.stop_price is not none else '' }}" placeholder="可选"></label>
+        </div>
+        <label>备注<input name="notes" maxlength="200" value="{{ transaction.notes or '' }}" placeholder="订单或成交说明"></label>
+        <div class="form-actions">
+          <a class="button secondary button-link" href="{{ url_for('dashboard') }}">取消</a>
+          <button class="button primary" type="submit">保存修改</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

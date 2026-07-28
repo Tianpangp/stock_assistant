@@ -30,7 +30,7 @@ class KronosScorer:
         self.context = context
         self.horizon = horizon
 
-    def score(self, frame: pd.DataFrame) -> dict[str, float]:
+    def score(self, frame: pd.DataFrame) -> dict[str, object]:
         context = frame.tail(self.context).copy()
         if len(context) < self.context:
             raise ValueError(f"Kronos needs {self.context} daily bars")
@@ -52,11 +52,23 @@ class KronosScorer:
         endpoint = float(predicted["close"].iloc[-1])
         predicted_return = endpoint / start - 1
         path_low = float(predicted["low"].min()) / start - 1
-        if not np.isfinite([endpoint, predicted_return, path_low]).all():
+        predicted_values = predicted[FEATURES].to_numpy(dtype=float)
+        if not np.isfinite(predicted_values).all() or not np.isfinite(
+            [endpoint, predicted_return, path_low]
+        ).all():
             raise ValueError("Kronos returned a non-finite prediction")
         score = max(0.0, min(100.0, 50.0 + predicted_return / 0.05 * 50.0))
+        predicted_bars = []
+        for timestamp, row in predicted.iterrows():
+            predicted_bars.append(
+                {
+                    "time": pd.Timestamp(timestamp).date().isoformat(),
+                    **{feature: float(row[feature]) for feature in FEATURES},
+                }
+            )
         return {
             "kronos_return": predicted_return,
             "kronos_path_low": path_low,
             "kronos_score": score,
+            "predicted_bars": predicted_bars,
         }

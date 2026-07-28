@@ -152,22 +152,14 @@ def record_transaction(
     fee: float = 0,
     stop_price: float | None = None,
     notes: str = "",
-    name: str | None = None,
 ) -> int:
-    side = side.upper()
-    if side not in {"BUY", "SELL"}:
-        raise ValueError("side must be BUY or SELL")
-    if quantity <= 0 or price <= 0 or fee < 0:
-        raise ValueError("quantity and price must be positive; fee cannot be negative")
-    if side == "BUY" and quantity % 100 != 0:
-        raise ValueError("A-share buy quantity must be a multiple of 100")
-    security = connection.execute("SELECT code FROM securities WHERE code=?", (code,)).fetchone()
+    side = validate_transaction_values(side, quantity, price, fee)
+    security = connection.execute(
+        "SELECT code FROM securities WHERE code=? AND kind='stock' AND is_verified=1",
+        (code,),
+    ).fetchone()
     if not security:
-        market = code.split(".", 1)[0] if "." in code else "unknown"
-        connection.execute(
-            "INSERT INTO securities(code, name, market) VALUES (?, ?, ?)",
-            (code, name or code, market),
-        )
+        raise ValueError("stock code has not been verified against the A-share market")
     held = position_quantities(connection).get(code, 0)
     if side == "SELL" and quantity > held:
         raise ValueError(f"sell quantity {quantity} exceeds held quantity {held}")
@@ -193,5 +185,155 @@ def record_transaction(
         )
     if side == "SELL" and quantity == held:
         connection.execute("DELETE FROM position_controls WHERE code=?", (code,))
+    elif side == "SELL":
+        connection.execute(
+            """
+            UPDATE position_controls
+            SET partial_taken=1, updated_at=CURRENT_TIMESTAMP WHERE code=?
+            """,
+            (code,),
+        )
     connection.commit()
     return int(cursor.lastrowid)
+
+
+def validate_transaction_values(
+    side: str, quantity: int, price: float, fee: float
+) -> str:
+    side = side.upper()
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    if quantity <= 0 or price <= 0 or fee < 0:
+        raise ValueError("quantity and price must be positive; fee cannot be negative")
+    if side == "BUY" and quantity % 100 != 0:
+        raise ValueError("A-share buy quantity must be a multiple of 100")
+    return side
+
+
+def rebuild_position_control(connection: sqlite3.Connection, code: str) -> None:
+    trades = connection.execute(
+        "SELECT * FROM transactions WHERE code=? ORDER BY trade_date, id", (code,)
+    ).fetchall()
+    held = 0
+    opened_date = None
+    initial_stop = None
+    opening_price = 0.0
+    partial_taken = 0
+    for trade in trades:
+        quantity = int(trade["quantity"])
+        if trade["side"] == "BUY":
+            if held == 0:
+                opened_date = trade["trade_date"]
+                initial_stop = trade["stop_price"]
+                opening_price = float(trade["price"])
+                partial_taken = 0
+            held += quantity
+        else:
+            held -= quantity
+            if held < 0:
+                raise ValueError(f"sell quantity creates a negative position for {code}")
+            if held > 0:
+                partial_taken = 1
+            else:
+                opened_date = None
+                initial_stop = None
+                opening_price = 0.0
+                partial_taken = 0
+
+    if held <= 0 or not opened_date:
+        connection.execute("DELETE FROM position_controls WHERE code=?", (code,))
+        return
+
+    existing = connection.execute(
+        "SELECT * FROM position_controls WHERE code=?", (code,)
+    ).fetchone()
+    highest_row = connection.execute(
+        "SELECT MAX(close) highest FROM daily_bars WHERE code=? AND trade_date>=?",
+        (code, opened_date),
+    ).fetchone()
+    highest = max(opening_price, float(highest_row["highest"] or 0))
+    if existing and existing["opened_date"] == opened_date:
+        highest = max(highest, float(existing["highest_close"] or 0))
+        old_initial = existing["initial_stop"]
+        old_current = existing["current_stop"]
+        current_stop = (
+            initial_stop
+            if old_current is None or old_current == old_initial
+            else old_current
+        )
+    else:
+        current_stop = initial_stop
+    connection.execute(
+        """
+        INSERT INTO position_controls(
+          code, opened_date, initial_stop, current_stop, highest_close,
+          partial_taken, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(code) DO UPDATE SET
+          opened_date=excluded.opened_date,
+          initial_stop=excluded.initial_stop,
+          current_stop=excluded.current_stop,
+          highest_close=excluded.highest_close,
+          partial_taken=excluded.partial_taken,
+          updated_at=CURRENT_TIMESTAMP
+        """,
+        (
+            code,
+            opened_date,
+            initial_stop,
+            current_stop,
+            highest,
+            partial_taken,
+        ),
+    )
+
+
+def update_transaction(
+    connection: sqlite3.Connection,
+    transaction_id: int,
+    *,
+    trade_date: str,
+    code: str,
+    side: str,
+    quantity: int,
+    price: float,
+    fee: float = 0,
+    stop_price: float | None = None,
+    notes: str = "",
+) -> None:
+    original = connection.execute(
+        "SELECT * FROM transactions WHERE id=?", (transaction_id,)
+    ).fetchone()
+    if not original:
+        raise ValueError("transaction does not exist")
+    side = validate_transaction_values(side, quantity, price, fee)
+    security = connection.execute(
+        "SELECT code FROM securities WHERE code=? AND kind='stock' AND is_verified=1",
+        (code,),
+    ).fetchone()
+    if not security:
+        raise ValueError("stock code has not been verified against the A-share market")
+
+    connection.execute(
+        """
+        UPDATE transactions SET
+          trade_date=?, code=?, side=?, quantity=?, price=?, fee=?,
+          stop_price=?, notes=?
+        WHERE id=?
+        """,
+        (
+            trade_date,
+            code,
+            side,
+            quantity,
+            price,
+            fee,
+            stop_price,
+            notes.strip(),
+            transaction_id,
+        ),
+    )
+    calculate_portfolio(connection)
+    for affected_code in {str(original["code"]), code}:
+        rebuild_position_control(connection, affected_code)
+    connection.commit()

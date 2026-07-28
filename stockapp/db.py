@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS securities (
     market TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'stock',
     is_hs300 INTEGER NOT NULL DEFAULT 0,
+    is_tracked INTEGER NOT NULL DEFAULT 0,
+    is_verified INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     industry TEXT,
     industry_classification TEXT,
@@ -150,6 +152,21 @@ CREATE TABLE IF NOT EXISTS factor_snapshots (
     PRIMARY KEY (run_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS kronos_predictions (
+    code TEXT NOT NULL REFERENCES securities(code) ON DELETE CASCADE,
+    as_of_date TEXT NOT NULL,
+    horizon INTEGER NOT NULL CHECK(horizon > 0),
+    model_key TEXT NOT NULL,
+    predicted_return REAL NOT NULL,
+    path_low REAL NOT NULL,
+    score REAL NOT NULL,
+    predicted_bars_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (code, as_of_date, horizon, model_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kronos_predictions_latest
+ON kronos_predictions(code, as_of_date DESC);
+
 CREATE TABLE IF NOT EXISTS risk_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL REFERENCES recommendation_runs(id) ON DELETE CASCADE,
@@ -198,6 +215,8 @@ def migrate_schema(connection: sqlite3.Connection) -> None:
             "industry": "TEXT",
             "industry_classification": "TEXT",
             "industry_updated_at": "TEXT",
+            "is_tracked": "INTEGER NOT NULL DEFAULT 0",
+            "is_verified": "INTEGER NOT NULL DEFAULT 0",
         },
         "daily_bars": {
             "turnover_rate": "REAL",
@@ -214,6 +233,13 @@ def migrate_schema(connection: sqlite3.Connection) -> None:
         for column, definition in columns.items():
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    connection.execute("UPDATE securities SET is_verified=1 WHERE is_hs300=1")
+    connection.execute(
+        """
+        UPDATE securities SET is_tracked=1
+        WHERE is_hs300=0 AND code IN (SELECT DISTINCT code FROM transactions)
+        """
+    )
 
 
 @contextmanager

@@ -44,6 +44,9 @@ class BaoStockSession:
     def industries(self, as_of: str = "") -> pd.DataFrame:
         return result_frame(bs.query_stock_industry(date=as_of))
 
+    def stock_basic(self, code: str) -> pd.DataFrame:
+        return result_frame(bs.query_stock_basic(code=code))
+
     def bars(self, code: str, start: str, end: str) -> pd.DataFrame:
         result = bs.query_history_k_data_plus(
             code,
@@ -75,6 +78,27 @@ def normalize_end_date(value: str | None = None) -> str:
     return pd.Timestamp(value).date().isoformat()
 
 
+def lookup_a_share(code: str) -> dict[str, object] | None:
+    if not code.startswith(("sh.", "sz.")):
+        return None
+    with BaoStockSession() as session:
+        frame = session.stock_basic(code)
+    if frame.empty:
+        return None
+    matches = frame[frame["code"] == code]
+    if matches.empty:
+        return None
+    record = matches.iloc[0].to_dict()
+    if str(record.get("type") or "") != "1":
+        return None
+    return {
+        "code": code,
+        "name": str(record.get("code_name") or code),
+        "market": code.split(".", 1)[0],
+        "active": int(str(record.get("status") or "1") == "1"),
+    }
+
+
 def sync_universe(connection: sqlite3.Connection, session: BaoStockSession) -> int:
     frame = session.hs300()
     if frame.empty:
@@ -88,11 +112,12 @@ def sync_universe(connection: sqlite3.Connection, session: BaoStockSession) -> i
         rows.append((code, row.get("code_name") or code, code.split(".", 1)[0]))
     connection.executemany(
         """
-        INSERT INTO securities(code, name, market, kind, is_hs300, active, updated_at)
-        VALUES (?, ?, ?, 'stock', 1, 1, CURRENT_TIMESTAMP)
+        INSERT INTO securities(
+          code, name, market, kind, is_hs300, is_verified, active, updated_at
+        ) VALUES (?, ?, ?, 'stock', 1, 1, 1, CURRENT_TIMESTAMP)
         ON CONFLICT(code) DO UPDATE SET
           name=excluded.name, market=excluded.market, is_hs300=1,
-          active=1, updated_at=CURRENT_TIMESTAMP
+          is_verified=1, active=1, updated_at=CURRENT_TIMESTAMP
         """,
         rows,
     )
@@ -242,7 +267,10 @@ def sync_market_data(
             selected = [
                 row["code"]
                 for row in connection.execute(
-                    "SELECT code FROM securities WHERE is_hs300=1 ORDER BY code"
+                    """
+                    SELECT code FROM securities
+                    WHERE is_hs300=1 OR is_tracked=1 ORDER BY code
+                    """
                 )
             ]
         selected = [INDEX_CODE, *[code for code in selected if code != INDEX_CODE]]
@@ -287,7 +315,10 @@ def backfill_extended_bars(
     codes = [
         row["code"]
         for row in connection.execute(
-            "SELECT code FROM securities WHERE is_hs300=1 ORDER BY code"
+            """
+            SELECT code FROM securities
+            WHERE is_hs300=1 OR is_tracked=1 ORDER BY code
+            """
         )
     ]
     if limit:
@@ -339,7 +370,10 @@ def sync_financial_snapshots(
     codes = [
         row["code"]
         for row in connection.execute(
-            "SELECT code FROM securities WHERE is_hs300=1 ORDER BY code"
+            """
+            SELECT code FROM securities
+            WHERE is_hs300=1 OR is_tracked=1 ORDER BY code
+            """
         )
     ]
     if limit:

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <script defer src="{{ url_for('static', filename='vendor/lightweight-charts.standalone.production.js') }}"></script>
   <script defer src="{{ url_for('static', filename='stock-chart.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </head>
 <body>
   <header class="topbar">
@@ -55,12 +56,25 @@
     <section class="panel chart-panel">
       <div class="chart-toolbar">
         <div><span class="eyebrow">价格与成交量</span><h2>日K线</h2></div>
-        <fieldset class="ma-controls">
-          <legend>均线</legend>
-          {% for days, color, enabled in [(5, '#275d8c', true), (10, '#95630d', false), (20, '#176b4d', true), (30, '#3f6c74', false), (60, '#b33a32', true), (120, '#6b5f8d', false)] %}
-          <label style="--ma-color: {{ color }}"><input class="ma-toggle" type="checkbox" value="{{ days }}" {% if enabled %}checked{% endif %}><span></span>MA{{ days }}</label>
-          {% endfor %}
-        </fieldset>
+        <div class="chart-tools">
+          {% if prediction %}
+          <span class="forecast-status" title="基于 {{ prediction.as_of_date }} 收盘后的缓存结果"><i></i>Kronos预测 {{ prediction.horizon }}日 · {{ prediction.kronos_return|pct }}</span>
+          {% elif can_predict %}
+          <form method="post" action="{{ url_for('predict_stock', code=security.code) }}" data-background-job data-job-label="正在计算 {{ security.name }} 的 Kronos 预测">
+            <button class="button forecast-button" type="submit">计算Kronos预测</button>
+          </form>
+          {% elif not kronos_available %}
+          <span class="forecast-unavailable">Kronos模型未配置</span>
+          {% else %}
+          <span class="forecast-unavailable">日线不足512根，暂不可预测</span>
+          {% endif %}
+          <fieldset class="ma-controls">
+            <legend>均线</legend>
+            {% for days, color, enabled in [(5, '#275d8c', true), (10, '#95630d', false), (20, '#176b4d', true), (30, '#3f6c74', false), (60, '#b33a32', true), (120, '#6b5f8d', false)] %}
+            <label style="--ma-color: {{ color }}"><input class="ma-toggle" type="checkbox" value="{{ days }}" {% if enabled %}checked{% endif %}><span></span>MA{{ days }}</label>
+            {% endfor %}
+          </fieldset>
+        </div>
       </div>
       <div class="chart-legend" data-chart-legend>移动光标查看 OHLC</div>
       <div id="stock-chart" class="stock-chart" aria-label="{{ security.name }} 日K线图"></div>
@@ -84,5 +98,9 @@
     {% endif %}
   </main>
   <script id="stock-chart-data" type="application/json">{{ chart_data|tojson }}</script>
+  <script id="stock-prediction-data" type="application/json">{{ prediction.predicted_bars|tojson if prediction else '[]' }}</script>
+  <div class="job-overlay" data-job-overlay role="status" aria-live="polite" hidden>
+    <div class="job-dialog"><span class="spinner" aria-hidden="true"></span><div><strong data-job-message>正在计算Kronos预测</strong><span>完成后会自动显示并缓存结果</span></div></div>
+  </div>
 </body>
 </html>

@@ -9,6 +9,7 @@ import pandas as pd
 
 from .config import kronos_available
 from .db import set_setting
+from .kronos_cache import load_cached_prediction, save_cached_prediction
 from .market_data import INDEX_CODE
 from .portfolio import calculate_portfolio
 
@@ -532,7 +533,10 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
     candidates: list[dict[str, object]] = []
     frames: dict[str, pd.DataFrame] = {}
     for security in connection.execute(
-        "SELECT code, name, industry FROM securities WHERE is_hs300=1 AND active=1 ORDER BY code"
+        """
+        SELECT code, name, industry, is_hs300 FROM securities
+        WHERE (is_hs300=1 OR is_tracked=1) AND active=1 ORDER BY code
+        """
     ):
         frame = load_bars(connection, security["code"])
         frame = frame[frame["trade_date"] <= target_trade_date].reset_index(drop=True)
@@ -544,38 +548,66 @@ def run_strategy(connection: sqlite3.Connection, use_kronos: bool = False, top_k
         candidates.append(
             {
                 "code": security["code"], "name": security["name"],
-                "industry": security["industry"] or "未分类", **metrics,
+                "industry": security["industry"] or "未分类",
+                "is_hs300": int(security["is_hs300"]), **metrics,
             }
         )
     if not candidates:
         raise RuntimeError("No eligible factor rows. Backfill extended daily data first.")
     factor_table = score_factor_table(pd.DataFrame(candidates))
-    market = enhanced_market_state(index_frame, factor_table)
+    market_factors = factor_table[factor_table["is_hs300"] == 1]
+    market = enhanced_market_state(
+        index_frame, market_factors if not market_factors.empty else factor_table
+    )
     factor_table["opportunity_score"] = factor_table["opportunity_base"]
     factor_table["risk_score"] = factor_table["risk_score_base"]
     factor_table = factor_table.sort_values("opportunity_base", ascending=False)
 
     kronos_used = False
     if use_kronos and kronos_available() and not factor_table.empty:
-        try:
-            from .kronos_service import KronosScorer
-
-            scorer = KronosScorer()
-        except Exception:
-            scorer = None
-        if scorer:
-            for index, item in factor_table.head(max(top_k * 2, 10)).iterrows():
+        scorer = None
+        scorer_initialization_attempted = False
+        for index, item in factor_table.head(max(top_k * 2, 10)).iterrows():
+            prediction = load_cached_prediction(
+                connection, str(item["code"]), str(item["trade_date"])
+            )
+            from_cache = prediction is not None
+            if prediction is None and not scorer_initialization_attempted:
+                scorer_initialization_attempted = True
                 try:
-                    prediction = scorer.score(frames[str(item["code"])])
-                    for key, value in prediction.items():
-                        factor_table.at[index, key] = value
-                    kronos_risk = float(np.clip(50 - prediction["kronos_return"] / 0.05 * 50, 0, 100))
-                    factor_table.at[index, "opportunity_score"] = item["opportunity_base"] * 0.90 + prediction["kronos_score"] * 0.10
-                    factor_table.at[index, "risk_score"] = item["risk_score_base"] * 0.90 + kronos_risk * 0.10
-                    factor_table.at[index, "confidence"] = min(100, item["confidence"] + 5)
-                    kronos_used = True
+                    from .kronos_service import KronosScorer
+
+                    scorer = KronosScorer()
                 except Exception as exc:
                     factor_table.at[index, "kronos_error"] = str(exc)
+            if prediction is None and scorer is not None:
+                try:
+                    prediction = scorer.score(frames[str(item["code"])])
+                    save_cached_prediction(
+                        connection,
+                        str(item["code"]),
+                        str(item["trade_date"]),
+                        prediction,
+                    )
+                except Exception as exc:
+                    factor_table.at[index, "kronos_error"] = str(exc)
+            if prediction is None:
+                continue
+            for key in ("kronos_return", "kronos_path_low", "kronos_score"):
+                factor_table.at[index, key] = prediction[key]
+            factor_table.at[index, "kronos_cached"] = from_cache
+            kronos_risk = float(
+                np.clip(50 - float(prediction["kronos_return"]) / 0.05 * 50, 0, 100)
+            )
+            factor_table.at[index, "opportunity_score"] = (
+                item["opportunity_base"] * 0.90
+                + float(prediction["kronos_score"]) * 0.10
+            )
+            factor_table.at[index, "risk_score"] = (
+                item["risk_score_base"] * 0.90 + kronos_risk * 0.10
+            )
+            factor_table.at[index, "confidence"] = min(100, item["confidence"] + 5)
+            kronos_used = True
     factor_table = factor_table.sort_values("opportunity_score", ascending=False)
 
     drawdown = float(portfolio["drawdown"])

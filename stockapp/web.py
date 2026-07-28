@@ -7,13 +7,20 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.exceptions import HTTPException
 
 from .config import DATABASE_PATH, kronos_available
 from .db import database, finish_job, get_setting, set_setting, start_job
-from .market_data import sync_market_data
-from .portfolio import calculate_portfolio, record_transaction
-from .strategy import run_strategy
+from .kronos_cache import load_cached_prediction, save_cached_prediction
+from .market_data import lookup_a_share, sync_market_data
+from .portfolio import (
+    calculate_portfolio,
+    record_transaction,
+    update_transaction,
+    validate_transaction_values,
+)
+from .strategy import load_bars, run_strategy
 
 
 JOB_LOCK = threading.Lock()
@@ -34,12 +41,12 @@ JOB_TYPE_LABELS = {"SYNC": "行情更新", "RECOMMEND": "策略计算"}
 JOB_STATUS_LABELS = {"RUNNING": "运行中", "COMPLETE": "已完成", "FAILED": "失败"}
 RISK_LABELS = {"HIGH_RISK": "高风险", "CAUTION": "需谨慎"}
 STOCK_SORTS = {
-    "opportunity_desc": ("机会分：高到低", "f.opportunity_score DESC"),
-    "opportunity_asc": ("机会分：低到高", "f.opportunity_score ASC"),
-    "risk_desc": ("风险分：高到低", "f.risk_score DESC"),
-    "risk_asc": ("风险分：低到高", "f.risk_score ASC"),
-    "confidence_desc": ("置信度：高到低", "f.confidence DESC"),
-    "confidence_asc": ("置信度：低到高", "f.confidence ASC"),
+    "opportunity_desc": ("机会分：高到低", "f.opportunity_score IS NULL, f.opportunity_score DESC"),
+    "opportunity_asc": ("机会分：低到高", "f.opportunity_score IS NULL, f.opportunity_score ASC"),
+    "risk_desc": ("风险分：高到低", "f.risk_score IS NULL, f.risk_score DESC"),
+    "risk_asc": ("风险分：低到高", "f.risk_score IS NULL, f.risk_score ASC"),
+    "confidence_desc": ("置信度：高到低", "f.confidence IS NULL, f.confidence DESC"),
+    "confidence_asc": ("置信度：低到高", "f.confidence IS NULL, f.confidence ASC"),
 }
 FACTOR_GROUP_LABELS = (
     ("trend_score", "趋势", "反映股价当前是否处于持续、明确的上升方向。"),
@@ -69,6 +76,67 @@ def parse_json(value: str, fallback: object) -> object:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return fallback
+
+
+def parse_transaction_form(form) -> dict[str, object]:
+    trade_date = str(form.get("trade_date") or date.today().isoformat())
+    date.fromisoformat(trade_date)
+    side = str(form.get("side", "")).upper()
+    quantity = int(form.get("quantity", "0"))
+    price = float(form.get("price", "0"))
+    fee = float(form.get("fee", "0") or 0)
+    validate_transaction_values(side, quantity, price, fee)
+    stop_raw = str(form.get("stop_price", "")).strip()
+    stop_price = float(stop_raw) if stop_raw else None
+    if stop_price is not None and stop_price < 0:
+        raise ValueError("stop price cannot be negative")
+    return {
+        "trade_date": trade_date,
+        "code": normalize_code(str(form.get("code", ""))),
+        "side": side,
+        "quantity": quantity,
+        "price": price,
+        "fee": fee,
+        "stop_price": stop_price,
+        "notes": str(form.get("notes", "")),
+    }
+
+
+def ensure_a_share_security(
+    connection, code: str
+) -> dict[str, object]:
+    existing = connection.execute(
+        "SELECT * FROM securities WHERE code=?", (code,)
+    ).fetchone()
+    if existing and existing["kind"] != "stock":
+        raise ValueError("该代码不是A股股票。")
+    if existing and existing["is_verified"]:
+        if not existing["active"]:
+            raise ValueError("该股票当前不是在市状态，禁止录入成交。")
+        if not existing["is_hs300"]:
+            connection.execute(
+                "UPDATE securities SET is_tracked=1 WHERE code=?", (code,)
+            )
+        return dict(existing)
+
+    security = lookup_a_share(code)
+    if not security:
+        raise ValueError("未在A股市场查询到该股票代码，禁止录入。")
+    if not security["active"]:
+        raise ValueError("该股票当前不是在市状态，禁止录入成交。")
+    connection.execute(
+        """
+        INSERT INTO securities(
+          code, name, market, kind, is_tracked, is_verified, active, updated_at
+        ) VALUES (?, ?, ?, 'stock', 1, 1, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(code) DO UPDATE SET
+          name=excluded.name, market=excluded.market, kind='stock',
+          is_tracked=CASE WHEN securities.is_hs300=1 THEN securities.is_tracked ELSE 1 END,
+          is_verified=1, active=1, updated_at=CURRENT_TIMESTAMP
+        """,
+        (security["code"], security["name"], security["market"]),
+    )
+    return security
 
 
 def launch_background(db_path: Path, job_type: str, callback: Callable) -> bool:
@@ -252,13 +320,13 @@ def create_app(test_config: dict | None = None) -> Flask:
                 where = "" if not conditions else "AND " + " AND ".join(conditions)
                 rows = connection.execute(
                     f"""
-                    SELECT f.code, s.name, s.industry, f.opportunity_score,
+                    SELECT s.code, s.name, s.industry, s.is_tracked, f.opportunity_score,
                            f.risk_score, f.confidence, f.metrics_json,
                            CASE WHEN w.code IS NULL THEN 0 ELSE 1 END AS is_watched
-                    FROM factor_snapshots f
-                    JOIN securities s ON s.code=f.code
-                    LEFT JOIN watchlist w ON w.code=f.code
-                    WHERE f.run_id=? AND s.is_hs300=1 {where}
+                    FROM securities s
+                    LEFT JOIN factor_snapshots f ON f.code=s.code AND f.run_id=?
+                    LEFT JOIN watchlist w ON w.code=s.code
+                    WHERE (s.is_hs300=1 OR s.is_tracked=1) {where}
                     ORDER BY {STOCK_SORTS[sort_key][1]}, s.code
                     """,
                     params,
@@ -323,6 +391,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             is_watched = connection.execute(
                 "SELECT 1 FROM watchlist WHERE code=?", (normalized,)
             ).fetchone() is not None
+            prediction = (
+                load_cached_prediction(connection, normalized, bars[-1]["trade_date"])
+                if bars
+                else None
+            )
         chart_data = [
             {
                 "time": row["trade_date"],
@@ -358,11 +431,62 @@ def create_app(test_config: dict | None = None) -> Flask:
             factor=factor_data,
             recommendation=recommendation_data,
             is_watched=is_watched,
+            prediction=prediction,
+            can_predict=bool(
+                latest and len(chart_data) >= 512 and kronos_available()
+            ),
+            kronos_available=kronos_available(),
             chart_data=chart_data,
             latest=latest,
             daily_change=daily_change,
             factor_group_labels=FACTOR_GROUP_LABELS,
         )
+
+    @app.post("/stocks/<path:code>/kronos")
+    def predict_stock(code: str):
+        try:
+            normalized = normalize_code(code)
+        except ValueError:
+            abort(404)
+        if not kronos_available():
+            flash("Kronos 模型未配置，无法计算预测。", "error")
+            return redirect(url_for("stock_detail", code=normalized))
+        if not JOB_LOCK.acquire(blocking=False):
+            flash("已有行情或模型任务正在运行，请稍后再试。", "error")
+            return redirect(url_for("stock_detail", code=normalized))
+        try:
+            with database(db_path) as connection:
+                security = connection.execute(
+                    "SELECT name FROM securities WHERE code=?", (normalized,)
+                ).fetchone()
+                if not security:
+                    abort(404)
+                frame = load_bars(connection, normalized)
+                if frame.empty:
+                    raise ValueError("该股票没有可用于预测的日线数据。")
+                as_of_date = str(frame["trade_date"].iloc[-1])
+                cached = load_cached_prediction(connection, normalized, as_of_date)
+            if cached:
+                flash(f"已使用 {as_of_date} 的 Kronos 缓存预测。", "success")
+                return redirect(url_for("stock_detail", code=normalized))
+            if len(frame) < 512:
+                raise ValueError(f"Kronos 至少需要 512 根日线，当前只有 {len(frame)} 根。")
+
+            from .kronos_service import KronosScorer
+
+            prediction = KronosScorer().score(frame)
+            with database(db_path) as connection:
+                save_cached_prediction(
+                    connection, normalized, as_of_date, prediction
+                )
+            flash(f"{security['name']} 的未来 5 日预测已计算并缓存。", "success")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            flash(f"Kronos 预测失败：{exc}", "error")
+        finally:
+            JOB_LOCK.release()
+        return redirect(url_for("stock_detail", code=normalized))
 
     @app.post("/watchlist/<path:code>")
     def update_watchlist(code: str):
@@ -394,25 +518,64 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.post("/transactions")
     def add_transaction():
         try:
-            code = normalize_code(request.form.get("code", ""))
-            stop_raw = request.form.get("stop_price", "").strip()
+            values = parse_transaction_form(request.form)
             with database(db_path) as connection:
-                record_transaction(
-                    connection,
-                    trade_date=request.form.get("trade_date") or date.today().isoformat(),
-                    code=code,
-                    side=request.form.get("side", ""),
-                    quantity=int(request.form.get("quantity", "0")),
-                    price=float(request.form.get("price", "0")),
-                    fee=float(request.form.get("fee", "0") or 0),
-                    stop_price=float(stop_raw) if stop_raw else None,
-                    notes=request.form.get("notes", ""),
-                    name=request.form.get("name", "").strip() or None,
-                )
+                ensure_a_share_security(connection, str(values["code"]))
+                record_transaction(connection, **values)
             flash("成交已记录。", "success")
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
             flash(str(exc), "error")
         return redirect(url_for("dashboard"))
+
+    @app.route("/transactions/<int:transaction_id>/edit", methods=["GET", "POST"])
+    def edit_transaction(transaction_id: int):
+        if request.method == "POST":
+            try:
+                values = parse_transaction_form(request.form)
+                with database(db_path) as connection:
+                    ensure_a_share_security(connection, str(values["code"]))
+                    update_transaction(connection, transaction_id, **values)
+                flash("成交记录已更新，持仓已重新计算。", "success")
+                return redirect(url_for("dashboard"))
+            except (ValueError, TypeError, OverflowError) as exc:
+                flash(str(exc), "error")
+
+        with database(db_path) as connection:
+            transaction = connection.execute(
+                """
+                SELECT t.*, s.name FROM transactions t
+                JOIN securities s ON s.code=t.code WHERE t.id=?
+                """,
+                (transaction_id,),
+            ).fetchone()
+        if not transaction:
+            abort(404)
+        values = dict(transaction)
+        if request.method == "POST":
+            values.update(request.form.to_dict())
+        return render_template("transaction_edit.html", transaction=values)
+
+    @app.post("/api/securities/resolve")
+    def resolve_security():
+        payload = request.get_json(silent=True) or request.form
+        try:
+            code = normalize_code(str(payload.get("code", "")))
+            with database(db_path) as connection:
+                security = ensure_a_share_security(connection, code)
+            return jsonify(
+                {
+                    "ok": True,
+                    "code": code,
+                    "name": security["name"],
+                    "is_hs300": bool(security.get("is_hs300", False)),
+                }
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 422
+        except Exception:
+            return jsonify(
+                {"ok": False, "message": "A股代码查询服务暂时不可用，请稍后重试。"}
+            ), 503
 
     @app.post("/settings")
     def update_settings():

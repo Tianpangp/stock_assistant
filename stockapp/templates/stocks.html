@@ -60,13 +60,13 @@
                   <button class="watch-button {{ 'active' if item.is_watched else '' }}" type="submit" data-icon-button title="{{ '取消关注' if item.is_watched else '加关注' }}" aria-label="{{ '取消关注' if item.is_watched else '加关注' }} {{ item.name }}">{{ '★' if item.is_watched else '☆' }}</button>
                 </form>
               </td>
-              <td><a href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}</small></a></td>
+              <td><a href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}{% if item.is_tracked %} · 扩展股票{% endif %}</small></a></td>
               <td>{{ item.industry or '未分类' }}</td>
               <td>{{ '%.2f'|format(item.price) if item.price is not none else '—' }}</td>
               <td class="{{ 'positive' if item.return20 is not none and item.return20 >= 0 else 'negative' if item.return20 is not none else '' }}">{{ item.return20|pct if item.return20 is not none else '—' }}</td>
-              <td><strong class="score opportunity-score">{{ '%.1f'|format(item.opportunity_score) }}</strong></td>
-              <td><strong class="score {{ 'risk-score-high' if item.risk_score >= 65 else '' }}">{{ '%.1f'|format(item.risk_score) }}</strong></td>
-              <td>{{ '%.1f'|format(item.confidence) }}</td>
+              <td><strong class="score opportunity-score">{{ '%.1f'|format(item.opportunity_score) if item.opportunity_score is not none else '待计算' }}</strong></td>
+              <td><strong class="score {{ 'risk-score-high' if item.risk_score is not none and item.risk_score >= 65 else '' }}">{{ '%.1f'|format(item.risk_score) if item.risk_score is not none else '—' }}</strong></td>
+              <td>{{ '%.1f'|format(item.confidence) if item.confidence is not none else '—' }}</td>
             </tr>
           {% else %}
             <tr><td class="empty-row" colspan="8">{% if watched_only %}暂无符合条件的关注股票{% elif query %}没有找到匹配股票{% else %}请先生成盘前建议{% endif %}</td></tr>

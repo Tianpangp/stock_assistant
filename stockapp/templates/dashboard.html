@@ -81,7 +81,7 @@
 
       <aside class="panel trade-panel">
         <div class="section-heading"><div><span class="eyebrow">成交账本</span><h2>录入实际买卖</h2></div></div>
-        <form class="trade-form" method="post" action="{{ url_for('add_transaction') }}">
+        <form class="trade-form" method="post" action="{{ url_for('add_transaction') }}" data-stock-validation>
           <div class="segmented">
             <label><input type="radio" name="side" value="BUY" checked><span>买入</span></label>
             <label><input type="radio" name="side" value="SELL"><span>卖出</span></label>
@@ -135,11 +135,11 @@
       <div class="section-heading"><div><span class="eyebrow">交易记录</span><h2>最近成交</h2></div><span class="data-meta">{{ data_status['securities'] or 0 }} 只证券 · {{ data_status['bars'] or 0 }} 根日K</span></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>日期</th><th>股票</th><th>方向</th><th>股数</th><th>价格</th><th>费用</th><th>备注</th></tr></thead>
+          <thead><tr><th>日期</th><th>股票</th><th>方向</th><th>股数</th><th>价格</th><th>费用</th><th>备注</th><th>操作</th></tr></thead>
           <tbody>
           {% for item in transactions %}
-            <tr><td>{{ item.trade_date }}</td><td><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}</small></a></td><td><span class="action {{ item.side|lower }}">{{ item.side|action_label }}</span></td><td>{{ item.quantity }}</td><td>{{ item.price|money }}</td><td>{{ item.fee|money }}</td><td>{{ item.notes or '—' }}</td></tr>
-          {% else %}<tr><td class="empty-row" colspan="7">暂无成交记录</td></tr>{% endfor %}
+            <tr><td>{{ item.trade_date }}</td><td><a class="stock-link" href="{{ url_for('stock_detail', code=item.code) }}"><strong>{{ item.name }}</strong><small>{{ item.code }}</small></a></td><td><span class="action {{ item.side|lower }}">{{ item.side|action_label }}</span></td><td>{{ item.quantity }}</td><td>{{ item.price|money }}</td><td>{{ item.fee|money }}</td><td>{{ item.notes or '—' }}</td><td><a class="text-link table-action" href="{{ url_for('edit_transaction', transaction_id=item.id) }}">修改</a></td></tr>
+          {% else %}<tr><td class="empty-row" colspan="8">暂无成交记录</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>

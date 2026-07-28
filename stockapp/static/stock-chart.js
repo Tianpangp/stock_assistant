@@ -1,6 +1,7 @@
 (() => {
   const container = document.getElementById('stock-chart');
   const dataElement = document.getElementById('stock-chart-data');
+  const predictionElement = document.getElementById('stock-prediction-data');
   const errorElement = document.querySelector('[data-chart-error]');
   if (!container || !dataElement) return;
 
@@ -11,6 +12,7 @@
 
   try {
     const bars = JSON.parse(dataElement.textContent || '[]');
+    const predictedBars = JSON.parse(predictionElement?.textContent || '[]');
     if (!bars.length || !window.LightweightCharts) {
       showError();
       return;
@@ -59,6 +61,30 @@
     })));
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
 
+    let forecast = null;
+    if (predictedBars.length) {
+      forecast = chart.addCandlestickSeries({
+        upColor: 'rgba(197, 138, 24, .55)',
+        downColor: 'rgba(88, 119, 146, .55)',
+        borderUpColor: '#a56d08',
+        borderDownColor: '#46647e',
+        wickUpColor: '#a56d08',
+        wickDownColor: '#46647e',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      forecast.setData(predictedBars.map(({ time, open, high, low, close }) => ({
+        time, open, high, low, close,
+      })));
+      forecast.setMarkers([{
+        time: predictedBars[0].time,
+        position: 'aboveBar',
+        color: '#95630d',
+        shape: 'arrowDown',
+        text: 'Kronos预测',
+      }]);
+    }
+
     const colors = {
       5: '#275d8c',
       10: '#95630d',
@@ -95,24 +121,28 @@
     });
 
     const legend = document.querySelector('[data-chart-legend]');
-    const formatLegend = (bar) => {
+    const formatLegend = (bar, predicted = false) => {
       if (!bar || !legend) return;
       const change = bar.open ? (bar.close / bar.open - 1) * 100 : 0;
-      legend.textContent = `${bar.time}  开 ${bar.open.toFixed(2)}  高 ${bar.high.toFixed(2)}  低 ${bar.low.toFixed(2)}  收 ${bar.close.toFixed(2)}  ${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+      const prefix = predicted ? 'Kronos预测 · ' : '';
+      legend.textContent = `${prefix}${bar.time}  开 ${bar.open.toFixed(2)}  高 ${bar.high.toFixed(2)}  低 ${bar.low.toFixed(2)}  收 ${bar.close.toFixed(2)}  ${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
     };
     formatLegend(bars[bars.length - 1]);
     chart.subscribeCrosshairMove((param) => {
       const point = param.seriesData?.get(candles);
-      if (point && param.time) formatLegend({ ...point, time: param.time });
+      const forecastPoint = forecast ? param.seriesData?.get(forecast) : null;
+      if (forecastPoint && param.time) formatLegend({ ...forecastPoint, time: param.time }, true);
+      else if (point && param.time) formatLegend({ ...point, time: param.time });
       else formatLegend(bars[bars.length - 1]);
     });
 
     const initialVisibleBars = Math.min(100, bars.length);
     chart.timeScale().setVisibleLogicalRange({
       from: bars.length - initialVisibleBars,
-      to: bars.length - 1,
+      to: bars.length + predictedBars.length - 1,
     });
     container.dataset.barCount = String(bars.length);
+    container.dataset.predictionBarCount = String(predictedBars.length);
     container.dataset.initialVisibleBars = String(initialVisibleBars);
     const observer = new ResizeObserver(() => {
       chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
